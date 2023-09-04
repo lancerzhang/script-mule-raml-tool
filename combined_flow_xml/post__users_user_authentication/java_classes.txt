@@ -1,0 +1,2 @@
+com.example.bean.AuthenticationRequest
+com.example.bean.AuthenticationResponse

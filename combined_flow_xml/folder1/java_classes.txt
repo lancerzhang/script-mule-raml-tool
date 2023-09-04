@@ -1,2 +1,0 @@
-com.example.bean.UserRequest
-com.example.bean.UserResponse

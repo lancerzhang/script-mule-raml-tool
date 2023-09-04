@@ -4,8 +4,6 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-import java.io.IOException;
-
 @SpringBootApplication
 public class ScriptMuleRamlToolApplication implements CommandLineRunner {
 
@@ -14,7 +12,7 @@ public class ScriptMuleRamlToolApplication implements CommandLineRunner {
     }
 
     @Override
-    public void run(String... args) throws IOException {
+    public void run(String... args) throws Exception {
         RamlCompletion ramlCompletion = new RamlCompletion();
         ramlCompletion.processRaml("config.json");
     }

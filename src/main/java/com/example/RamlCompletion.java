@@ -1,62 +1,124 @@
 package com.example;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.raml.v2.api.RamlModelBuilder;
-import org.raml.v2.api.RamlModelResult;
-import org.raml.v2.api.model.v08.api.Api;
-import org.raml.v2.api.model.v08.methods.Method;
-import org.raml.v2.api.model.v08.resources.Resource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class RamlCompletion {
+    private final Logger logger = LoggerFactory.getLogger(this.getClass());
+    private final String specPath = "/src/main/api/";
 
-    public void processRaml(String configPath) throws IOException {
+    private String projectPath;
+
+    public void setProjectPath(String projectPath) {
+        this.projectPath = projectPath;
+    }
+
+    public void processRaml(String configPath) throws Exception {
+        Instant startTime = Instant.now();
+
         ObjectMapper mapper = new ObjectMapper();
         ProjectConfig config = mapper.readValue(new File(configPath), ProjectConfig.class);
+        setProjectPath(config.getProjectPath());
 
-        String apiDirPath = config.getProjectPath() + "/src/main/api";
-        File apiDir = new File(apiDirPath);
+        CommandUtils.runMvnCompile(projectPath);
+        Map<Object, Object> filteredData = YamlUtil.filterRaml(projectPath);
 
-        File[] ramlFiles = apiDir.listFiles((dir, name) -> name.endsWith(".raml"));
-        if (ramlFiles != null && ramlFiles.length == 1) {
-            String ramlFilePath = ramlFiles[0].getAbsolutePath();
-            RamlModelResult ramlModelResult = new RamlModelBuilder().buildApi(ramlFilePath);
+        completeSpec(filteredData);
 
-            if (ramlModelResult.hasErrors()) {
-                System.out.println("Errors in the RAML file");
-                return;
+        Yaml yaml = new Yaml();
+        try (FileWriter writer = new FileWriter(FileUtil.getPath(projectPath + specPath + "filtered_api.yaml").toFile())) {
+            yaml.dump(filteredData, writer);
+        } catch (IOException e) {
+            throw new RuntimeException("Error writing to filtered_api.raml", e);
+        }
+        Instant endTime = Instant.now();
+        logger.info("Job duration (seconds): " + Duration.between(startTime, endTime).getSeconds());
+    }
+
+    protected void completeSpec(Map<Object, Object> filteredData) throws Exception {
+        completeSpecHelper(filteredData, "");
+    }
+
+    protected void completeSpecHelper(Map<Object, Object> currentData, String currentPath) throws Exception {
+        for (Object objKey : currentData.keySet()) {
+            if (!(objKey instanceof String)) {
+                continue; // skip if key isn't a String
             }
 
-            Api api = ramlModelResult.getApiV08();
-            List<Resource> resources = api.resources();
-            printEndpointSchemas(resources, "");
+            String key = (String) objKey;
+            Object value = currentData.get(key);
+
+            String apiPath = currentPath + key;  // Construct the new path for this level
+            logger.debug("processing path: " + apiPath);
+
+            if (value instanceof Map) {
+                Map<Object, Object> valueNode = (Map<Object, Object>) value;
+                // This recursive call ensures that all nested maps are processed.
+                completeSpecHelper(valueNode, apiPath);
+
+                if (valueNode.containsKey("get")) {
+                    generateSchema("get", apiPath, valueNode);
+                }
+
+                if (valueNode.containsKey("post")) {
+                    generateSchema("post", apiPath, valueNode);
+                }
+            }
         }
     }
 
-    private void printEndpointSchemas(List<Resource> resources, String parentUrl) {
-        for (Resource resource : resources) {
-            String url = parentUrl + resource.relativeUri().value();
-            for (Method method : resource.methods()) {
-                boolean hasRequestBodySchema = false;
-                boolean hasResponseBodySchema = false;
+    protected void generateSchema(String httpMethod, String apiPath, Map<Object, Object> valueNode) throws Exception {
+        Map<Object, Object> responseBodyMap = YamlUtil.getPathNode(valueNode, httpMethod, "responses", 200, "body");
+        Map<Object, Object> requestBodyMap = YamlUtil.getPathNode(valueNode, httpMethod, "body");
+        String flowName = httpMethod + ":" + apiPath + ":mobile_api-config";
+        logger.debug("flowName: " + flowName);
 
-                if ("post".equalsIgnoreCase(method.method())) {
-                    hasRequestBodySchema = method.body() != null && !method.body().isEmpty();
-                }
+        boolean hasResponseBodySchema = responseBodyMap.get("application/json") != null;
+        boolean hasRequestBodySchema = requestBodyMap.get("application/json") != null;
 
-                hasResponseBodySchema = method.responses() != null && !method.responses().isEmpty();
+        String subFolder = FileUtil.formatFolderName(httpMethod, apiPath);
+        String javaClassStr = FileUtil.readFileAsString("./combined_flow_xml/" + subFolder + "/java_classes.txt");
 
-                if ("get".equalsIgnoreCase(method.method())) {
-                    System.out.println("Endpoint: " + url + ", Method: GET, Has Response Schema: " + hasResponseBodySchema);
-                } else if ("post".equalsIgnoreCase(method.method())) {
-                    System.out.println("Endpoint: " + url + ", Method: POST, Has Request Schema: " + hasRequestBodySchema + ", Has Response Schema: " + hasResponseBodySchema);
-                }
-            }
-
-            printEndpointSchemas(resource.resources(), url);
+        if (!hasResponseBodySchema) {
+            generateSchemaByJava(httpMethod, "Response", apiPath, javaClassStr, responseBodyMap);
+        }
+        if ("post".equals(httpMethod) && !hasRequestBodySchema) {
+            generateSchemaByJava(httpMethod, "Request", apiPath, javaClassStr, requestBodyMap);
         }
     }
+
+    protected void generateSchemaByJava(String httpMethod, String type, String apiPath, String reqJavaClassStr, Map<Object, Object> requestBodyMap) throws Exception {
+        logger.info("start to use java to generate schema for " + httpMethod + ":" + apiPath);
+        List<String> javaClasses = Utils.getContentItems(reqJavaClassStr);
+        List<JsonNode> schemas = new ArrayList<>();
+        for (String javaClass : javaClasses) {
+            Class<?> clazz = JavaUtil.loadClassFromFile(javaClass, projectPath + "/target/classes/");
+            JsonNode schema = JsonSchemaUtil.generateJsonSchemaNode(clazz);
+            schemas.add(schema);
+        }
+
+        JsonNode schemaNode = JsonSchemaUtil.mergeAll(schemas);
+        String newClassName = JavaUtil.convertToCamelCase(httpMethod + apiPath + "/" + type + "Body");
+        ObjectMapper mapper = new ObjectMapper();
+        String schemaStr = mapper.writeValueAsString(schemaNode);
+        String schemaFileName = JsonSchemaUtil.writeSchema(projectPath, newClassName, schemaStr);
+
+        Map<String, String> innerMap = new HashMap<>();
+        innerMap.put("schema", "!include schema/" + schemaFileName);
+        requestBodyMap.put("application/json", innerMap);
+    }
+
 }
