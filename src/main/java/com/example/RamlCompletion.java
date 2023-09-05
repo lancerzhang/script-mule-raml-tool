@@ -82,12 +82,10 @@ public class RamlCompletion {
 
     protected void generateSchema(String httpMethod, String apiPath, Map<Object, Object> valueNode) throws Exception {
         Map<Object, Object> responseBodyMap = YamlUtil.getPathNode(valueNode, httpMethod, "responses", 200, "body");
-        Map<Object, Object> requestBodyMap = YamlUtil.getPathNode(valueNode, httpMethod, "body");
         String flowName = httpMethod + ":" + apiPath + ":mobile_api-config";
         logger.debug("flowName: " + flowName);
 
         boolean hasResponseBodySchema = responseBodyMap.get("application/json") != null;
-        boolean hasRequestBodySchema = requestBodyMap.get("application/json") != null;
 
         String subFolder = FileUtil.formatFolderName(httpMethod, apiPath);
         String javaClassStr = FileUtil.readFileAsString("./combined_flow_xml/" + subFolder + "/java_classes.txt");
@@ -95,8 +93,12 @@ public class RamlCompletion {
         if (!hasResponseBodySchema) {
             generateSchemaByJava(httpMethod, "Response", apiPath, javaClassStr, responseBodyMap);
         }
-        if ("post".equals(httpMethod) && !hasRequestBodySchema) {
-            generateSchemaByJava(httpMethod, "Request", apiPath, javaClassStr, requestBodyMap);
+        if ("post".equals(httpMethod)) {
+            Map<Object, Object> requestBodyMap = YamlUtil.getPathNode(valueNode, httpMethod, "body");
+            boolean hasRequestBodySchema = requestBodyMap.get("application/json") != null;
+            if (!hasRequestBodySchema) {
+                generateSchemaByJava(httpMethod, "Request", apiPath, javaClassStr, requestBodyMap);
+            }
         }
     }
 
@@ -108,20 +110,24 @@ public class RamlCompletion {
         List<String> javaClasses = Utils.getContentItems(reqJavaClassStr);
         List<JsonNode> schemas = new ArrayList<>();
         for (String javaClass : javaClasses) {
-            Class<?> clazz = JavaUtil.loadClassFromFile(javaClass, projectPath + "/target/classes/");
-            JsonNode schema = JsonSchemaUtil.generateJsonSchemaNode(clazz);
-            schemas.add(schema);
+            if (javaClass.contains(type)) {
+                Class<?> clazz = JavaUtil.loadClassFromFile(javaClass, projectPath + "/target/classes/");
+                JsonNode schema = JsonSchemaUtil.generateJsonSchemaNode(clazz);
+                schemas.add(schema);
+            }
         }
 
-        JsonNode schemaNode = JsonSchemaUtil.mergeAll(schemas);
-        String newClassName = JavaUtil.convertToCamelCase(httpMethod + apiPath + "/" + type + "Body");
-        ObjectMapper mapper = new ObjectMapper();
-        String schemaStr = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(schemaNode);
-        String schemaFileName = JsonSchemaUtil.writeSchema(projectPath, newClassName, schemaStr);
+        if (!schemas.isEmpty()) {
+            JsonNode schemaNode = JsonSchemaUtil.mergeAll(schemas);
+            String newClassName = JavaUtil.convertToCamelCase(httpMethod + apiPath + "/" + type + "Body");
+            ObjectMapper mapper = new ObjectMapper();
+            String schemaStr = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(schemaNode);
+            String schemaFileName = JsonSchemaUtil.writeSchema(projectPath, newClassName, schemaStr);
 
-        Map<String, String> innerMap = new HashMap<>();
-        innerMap.put("schema", "!include schema/" + schemaFileName);
-        requestBodyMap.put("application/json", innerMap);
+            Map<String, String> innerMap = new HashMap<>();
+            innerMap.put("schema", "!include schema/" + schemaFileName);
+            requestBodyMap.put("application/json", innerMap);
+        }
     }
 
 }
