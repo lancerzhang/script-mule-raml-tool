@@ -10,7 +10,9 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map.Entry;
 
 public class JsonSchemaUtil {
     private static final String specPath = "/src/main/api/";
@@ -70,15 +72,33 @@ public class JsonSchemaUtil {
 
     public static JsonNode mergeAll(List<JsonNode> jsonNodes) {
         ObjectMapper mapper = new ObjectMapper();
-        ObjectNode merged = mapper.createObjectNode();  // Create an empty ObjectNode
+        ObjectNode merged = mapper.createObjectNode();
 
         for (JsonNode jsonNode : jsonNodes) {
-            // Assumes that jsonNode is an ObjectNode
-            if (jsonNode.isObject()) {
-                merged.setAll((ObjectNode) jsonNode);
-            }
+            deepMerge(merged, jsonNode);
         }
 
         return merged;
+    }
+
+    public static void deepMerge(ObjectNode mainNode, JsonNode updateNode) {
+        Iterator<Entry<String, JsonNode>> iterator = updateNode.fields();
+        while (iterator.hasNext()) {
+            Entry<String, JsonNode> entry = iterator.next();
+            String key = entry.getKey();
+            JsonNode value = entry.getValue();
+
+            if (mainNode.has(key) && mainNode.get(key).isObject() && value.isObject()) {
+                // If both are ObjectNodes, merge them deeply
+                deepMerge((ObjectNode) mainNode.get(key), value);
+            } else {
+                // Otherwise, replace the field in mainNode
+                if (value.isObject()) {
+                    // Clone the node to avoid modifying the original node
+                    value = value.deepCopy();
+                }
+                mainNode.set(key, value);
+            }
+        }
     }
 }
