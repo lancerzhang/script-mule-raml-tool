@@ -101,6 +101,9 @@ public class RamlCompletion {
     }
 
     protected void generateSchemaByJava(String httpMethod, String type, String apiPath, String reqJavaClassStr, Map<Object, Object> requestBodyMap) throws Exception {
+        if (reqJavaClassStr.isEmpty()) {
+            return;
+        }
         logger.info("start to use java to generate schema for " + httpMethod + ":" + apiPath);
         List<String> javaClasses = Utils.getContentItems(reqJavaClassStr);
         List<JsonNode> schemas = new ArrayList<>();
@@ -113,7 +116,7 @@ public class RamlCompletion {
         JsonNode schemaNode = JsonSchemaUtil.mergeAll(schemas);
         String newClassName = JavaUtil.convertToCamelCase(httpMethod + apiPath + "/" + type + "Body");
         ObjectMapper mapper = new ObjectMapper();
-        String schemaStr = mapper.writeValueAsString(schemaNode);
+        String schemaStr = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(schemaNode);
         String schemaFileName = JsonSchemaUtil.writeSchema(projectPath, newClassName, schemaStr);
 
         Map<String, String> innerMap = new HashMap<>();
